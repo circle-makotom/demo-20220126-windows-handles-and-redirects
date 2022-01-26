@@ -1,0 +1,88 @@
+version: 2.1
+
+executors:
+  windows:
+    machine:
+      image: windows-server-2019-vs2019:stable
+    shell: powershell.exe
+    resource_class: windows.medium
+
+jobs:
+  build-execCmd:
+    docker:
+      - image: golang
+    steps:
+      - checkout
+      - run: env GOOS=windows go build execCmd.go
+      - store_artifacts:
+          path: execCmd.exe
+      - persist_to_workspace:
+          root: .
+          paths:
+            - execCmd.exe
+
+  build-daemonize:
+    executor: windows
+    steps:
+      - checkout
+      - run:
+          name: Download Cygwin installer
+          shell: bash.exe -eo pipefail
+          command: curl -JOL https://cygwin.com/setup-x86_64.exe
+      - run:
+          name: Install Cygwin and required packages
+          command: .\setup-x86_64.exe -q -s https://mirrors.kernel.org/sourceware/cygwin/ -P gcc-core
+      - run:
+          name: Building daemonize.c with Cygwin GCC
+          shell: C:\\cygwin64\\bin\\bash.exe --login -eo pipefail
+          command: |
+            gcc -o /cygdrive/c/Users/circleci/project/daemonize.exe /cygdrive/c/Users/circleci/project/daemonize.c
+            cp /usr/bin/cygwin1.dll /cygdrive/c/Users/circleci/project/
+      - store_artifacts:
+          path: daemonize.exe
+      - store_artifacts:
+          path: cygwin1.dll
+      - persist_to_workspace:
+          root: .
+          paths:
+            - daemonize.exe
+            - cygwin1.dll
+
+  run-with-circleci:
+    executor: windows
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Without redir
+          shell: cmd.exe
+          command: daemonize
+      - run:
+          name: With redir
+          shell: cmd.exe
+          command: daemonize 2> dummy
+
+  run-with-go:
+    executor: windows
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Without redir
+          command: .\execCmd daemonize
+      - run:
+          name: With redir
+          command: .\execCmd "daemonize 2> dummy"
+
+workflows:
+  run:
+    jobs:
+      - build-execCmd
+      - build-daemonize
+      - run-with-circleci:
+          requires:
+            - build-daemonize
+      - run-with-go:
+          requires:
+            - build-execCmd
+            - build-daemonize
